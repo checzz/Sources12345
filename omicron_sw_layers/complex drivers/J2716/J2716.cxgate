@@ -1,0 +1,222 @@
+/****************************************************************************************************/
+/**
+\file       J2716.cxgate
+\brief      SW PWM signal generation functions for the XGATE
+\author     Team 3
+\version    1.0
+\date       30/10/2014
+*/
+/****************************************************************************************************/
+
+/*****************************************************************************************************
+* Include files
+*****************************************************************************************************/
+/** Core modules */
+#include "J2716.h"
+
+/** driver types Configuration Options */
+
+/** prototypes and main header Configuration Options */
+
+/** frecuency values */
+#include "pll.h"
+#include "xgate_config.h"
+#include "pit.h"
+#include "gpio.h"
+/*****************************************************************************************************
+* Declaration of module wide TYPEs 
+*****************************************************************************************************/
+
+/*****************************************************************************************************
+* Declaration of module wide FUNCTIONs 
+*****************************************************************************************************/
+
+/*****************************************************************************************************
+* Definition of module wide MACROs / #DEFINE-CONSTANTs 
+*****************************************************************************************************/
+
+#pragma DATA_SEG SHARED_DATA
+volatile J2716_StatusType * pstChannelsStat;
+volatile J2716_StatusType * pstLocalStat;
+volatile uint8 J2716X_u8Devices;
+volatile uint8 J2716X_u8Channels;
+volatile uint8 J2716X_boCallbackPending;
+#pragma DATA_SEG DEFAULT
+
+#pragma DATA_SEG XGATE_DATA
+
+#pragma DATA_SEG DEFAULT
+
+/*****************************************************************************************************
+* Definition of module wide VARIABLEs 
+*****************************************************************************************************/
+
+/******************************************************************************
+Function Name   : vfnJ2716_Cbk
+Parameters      : None
+Returns         : None
+Notes     		  : Software J2716 implementation. Callback function to be called 
+          		    by appropriate ISR
+******************************************************************************/
+#pragma CODE_SEG XGATE_CODE
+void vfnJ2716_Cbk(void) 
+{
+  uint16 u8Temp=0;
+  uint16 u8BitMsk=0;
+
+  volatile uint8 u8Channel;
+  volatile J2716_StatusType * pstStat=pstLocalStat;
+  
+  #if J2716_DBG == TRUE
+  PTJ_PTJ0=1;
+  #endif
+    
+  u8Channel=0;
+  do
+  {
+    
+    
+    if(1 == pstStat->u8MsgTickCtr)
+    { /* FIXED FALLING EDGE */
+      PORT_OFF(*pstStat->pu8MsgPort,pstStat->u8MsgPin);
+    }
+    else if((J2716_LOW_PULSE_TICKS ) == pstStat->u8MsgTickCtr)
+    { /* FIXED RISING EDGE */
+      PORT_ON(*pstStat->pu8MsgPort,pstStat->u8MsgPin);
+      pstStat->enMsgSeq++;/* Change to next sequence */
+      /*                    J2716_Start -> J2716_Sync
+                            J2716_Sync  -> J2716_Status 
+                            J2716_Status-> J2716_Data
+                            J2716_Data  -> J2716_Crc
+                            J2716_Crc   -> J2716_Pause
+      */
+    }
+    else if(J2716_Sync == pstStat->enMsgSeq )
+    {
+      if( J2716_SYNC_PERIOD_TICKS == pstStat->u8MsgTickCtr)
+      {
+        PORT_OFF(*pstStat->pu8MsgPort,pstStat->u8MsgPin);
+        pstStat->u8MsgTickCtr=0;
+        pstStat->u8MsgNibble=J2716_MIN_PERIOD_TICKS + 0/*STATUS*/;
+      }
+    }
+    else if(J2716_Status == pstStat->enMsgSeq )
+    {
+      if( pstStat->u8MsgTickCtr == pstStat->u8MsgNibble)
+      {
+        PORT_OFF(*pstStat->pu8MsgPort,pstStat->u8MsgPin);
+        pstStat->u8MsgTickCtr=0;
+        pstStat->u8MsgNibble = /*J2716_MIN_PERIOD_TICKS + */pstStat->au8MsgData[0];
+        pstStat->u8MsgDataIndex=1;
+      }
+    }
+    else if(J2716_Data == pstStat->enMsgSeq )
+    {
+      while ( !_ssem(J2716_SEMAPHORE) && (FALSE == J2716X_boCallbackPending) ) { }
+      if( pstStat->u8MsgTickCtr == pstStat->u8MsgNibble  )
+      {
+        PORT_OFF(*pstStat->pu8MsgPort,pstStat->u8MsgPin);
+        pstStat->u8MsgTickCtr=0;
+        if( pstStat->u8MsgDataIndex < pstStat->u8MsgLen  )
+        {/*Next DATA NIBBLE*/
+          /* Keep "pstStat->enMsgSeq" in <J2716_Data> ( ("J2716_Data"-1)="J2716_Status") */
+          pstStat->enMsgSeq = J2716_Status;
+          pstStat->u8MsgNibble=/*J2716_MIN_PERIOD_TICKS + */pstStat->au8MsgData[pstStat->u8MsgDataIndex];
+          pstStat->u8MsgDataIndex++;
+        }
+        else
+        {/*End of DATA */
+          pstStat->enMsgSeq = J2716_Data;
+          pstStat->u8MsgNibble=/*J2716_MIN_PERIOD_TICKS + */pstStat->u8MsgCrc;
+        }
+      }
+    }
+    else if(J2716_Crc == pstStat->enMsgSeq )
+    {
+      if( pstStat->u8MsgTickCtr == pstStat->u8MsgNibble  )
+      {
+        /*Check for PAUSE  */
+        PORT_OFF(*pstStat->pu8MsgPort,pstStat->u8MsgPin);
+        pstStat->u8MsgTickCtr=0;
+        if(FALSE == pstStat->u8MsgPauseEn)
+        { /*END of FRAME (PAUSE disabled)  */
+          pstStat->enMsgSeq = J2716_Start;
+        }
+        else
+        {
+          pstStat->u8MsgNibble=J2716_PAUSE_TICKS;
+        }
+
+        if(FALSE == pstStat->u8MsgCbkEn)
+        {
+          pstStat->enMsgStatus = J2716_IDLE;
+        }
+        else
+        {
+          J2716X_boCallbackPending = TRUE;
+          pstStat->enMsgStatus = J2716_CBK;
+          /* Notifies S12 at least one callback is ready */
+          XGSWT = 0x0404;
+        }
+      }
+    }
+    else if(J2716_Pause == pstStat->enMsgSeq )
+    {
+      if( pstStat->u8MsgTickCtr == pstStat->u8MsgNibble  )
+      {
+        /*END of FRAME (PAUSE enabled)  */
+        PORT_OFF(*pstStat->pu8MsgPort,pstStat->u8MsgPin);
+        pstStat->u8MsgTickCtr=0;
+        pstStat->enMsgSeq = J2716_Start;
+        //pstStat->enMsgStatus = J2716_IDLE;
+      }
+    }
+    else
+    {
+      pstStat->enMsgSeq = J2716_Start;
+    }
+    
+    pstStat->u8MsgTickCtr++;
+    pstStat++;
+    u8Channel++;
+  }while(u8Channel < J2716X_u8Channels);
+
+    /* Release the hardware semaphore */   
+    _csem(J2716_SEMAPHORE); 
+
+  #if J2716_DBG == TRUE
+  PTJ_PTJ0=0;
+  #endif
+  	    	    	    	
+}
+#pragma CODE_SEG DEFAULT
+
+/******************************************************************************
+Function Name : vfnJ2716_Init_Isr
+Parameters    : None
+Returns       : None
+Notes         : Emulated PWM implementation. Initialization of Callback function 
+                to be called by appropriate ISR
+******************************************************************************/
+#pragma CODE_SEG XGATE_CODE
+void interrupt vfnJ2716_Init_Isr(void) 
+{
+  uint8 u8ChannelIndex=0;
+                                  
+  /* Periodic Interrupt Timer Low Level Initialization */
+  vfnPIT2_Init(&vfnJ2716_Cbk, __XGATE_CORE);
+  /* Clear Software Interrupt request flag */
+  XGATE_SW_TRIGGER_X( SOFTWARE_TRIGGER_2, SOFTWARE_TRIGGER_DISABLE);
+
+  while (!_ssem(J2716_SEMAPHORE)) { }    
+ 
+  /* Change the status to IDLE */
+  for( u8ChannelIndex=0 ; (u8ChannelIndex < J2716X_u8Channels) ; u8ChannelIndex++)
+  {
+    pstLocalStat[u8ChannelIndex].enMsgStatus = J2716_IDLE;
+  }
+  J2716X_boCallbackPending = FALSE;
+    /* Release the hardware semaphore */   
+  _csem(J2716_SEMAPHORE);
+}
+#pragma CODE_SEG DEFAULT

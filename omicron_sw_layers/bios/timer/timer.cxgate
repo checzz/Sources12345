@@ -1,0 +1,170 @@
+/****************************************************************************************************/
+/**
+\file       timer.cxgate
+\brief      Timer initialization and low-level functions and prototypes
+\author     Abraham Tezmol
+\version    1.0
+\date       14/09/2012
+*/
+/****************************************************************************************************/
+
+/*****************************************************************************************************
+* Include files
+*****************************************************************************************************/
+/** Own headers */
+/* Periodic Interrupt Timer routines prototypes */
+#include    "timer.h"
+
+/*****************************************************************************************************
+* Declaration of module wide TYPEs 
+*****************************************************************************************************/
+
+/*****************************************************************************************************
+* Declaration of module wide FUNCTIONs 
+*****************************************************************************************************/	
+
+/*****************************************************************************************************
+* Definition of module wide MACROs / #DEFINE-CONSTANTs 
+*****************************************************************************************************/
+
+/*****************************************************************************************************
+* Definition of module wide VARIABLEs 
+*****************************************************************************************************/
+
+
+/*****************************************************************************************************
+* Definition of module wide (CONST-) CONSTANTs 
+*****************************************************************************************************/
+
+/*****************************************************************************************************
+* Code of module wide FUNCTIONS
+*****************************************************************************************************/
+
+/****************************************************************************************************/
+/**
+* \brief    TIMer Low level initialization
+* \author   Abraham Tezmol
+* \param    void
+* \return   void
+*/
+#pragma CODE_SEG XGATE_CODE 
+void vfnTimer_Init( void )
+{     
+    /** ~~~~~~~~~~ Main Timer configuration ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */ 
+    
+    /* Enable Timer                                                 --> bit 7 */
+    /* Allow timer to stop counting in freeze mode                  --> bit 5 */
+    /* Allow fast flag clear process                                --> bit 4 */
+    /* Use a precision prescaler for finer timing generation        --> bit 3 */
+        TIM_TSCR1              = 0xB8u;
+    /* Load default value for precision prescaler selection */
+        TIM_PTPSR              = TIMER_PRECISION_PRS_VALUE_HIGH; 
+    
+    /** ~~~~~~~~~~ Individual channel configuration ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
+
+    /** ~~~~~~~~~~ Crank channel ~~~~~~~~~~~~ */
+    /* Clear any pending output compare flag from past*/
+        TIM_TFLG1_C3F          = 1u;
+    /* Selects appropriate channel as output compare */
+        TIM_TIOS_IOS3          = 1u;
+    /* Drive OCx pin to the default state */
+        vfnTimer_DrivePinState(1);
+
+    /** ~~~~~~~~~~ RPM indication channel ~~~~~~~~~~~~ */
+    /* Clear any pending output compare flag from past*/
+        TIM_TFLG1_C2F          = 1u;
+    /* Selects appropriate channel as output compare */
+        TIM_TIOS_IOS2          = 1u;
+    /* Drive OCx pin to the default state */
+        vfnTimer_DriveRPMPinState(0);
+    
+}
+#pragma CODE_SEG DEFAULT
+ 
+/****************************************************************************************************/
+/**
+* \brief    TIMer future event scheduling. schedules a future event and programmes
+*           the logical level for the future event  
+* \author   Abraham Tezmol
+* \param    UINT16 u16Timeout   - [1..0xFFFF] PIT timeout value
+* \param    UINT8  level - desired logical level to be driven @ the future event
+* \return   void
+*/
+#pragma CODE_SEG XGATE_CODE
+    void vfnTimer_ScheduleEvent( UINT16 u16Timeout, UINT8 level )
+    {
+    /* Calculate future event --> 
+       roll over 16 bits is possible and the expected behavior due to nature of 16-bit counters */
+        TIM_TC3            = (UINT16)(TIM_TCNT + u16Timeout);
+    /* Clear any pending output compare flag from past*/
+        TIM_TFLG1_C3F           = 1u;
+    /* Programmes logical level for the future event @ OCx pin */
+        TIM_TCTL2_OL3           = level;
+    }
+#pragma CODE_SEG DEFAULT
+
+/****************************************************************************************************/
+/**
+* \brief    TIMer drive pin level. Allows assciated OCx to be driven to the selected logical value
+* \author   Abraham Tezmol
+* \param    UINT8 level - logical level to be driven into OCx output pin
+* \return   void
+*/
+#pragma CODE_SEG XGATE_CODE
+    void vfnTimer_DrivePinState( UINT8 level )
+    {
+    /* Disconnect OCx pin from the timer control */
+        TIM_OCPD_OCPD3         = 1u;
+    /* Select output compare action upon match --> selected option is clear OCx output line to zero  */
+        TIM_TCTL2_OM3          = 1u;
+        TIM_TCTL2_OL3          = level;
+    /* Allow the desired state to be programmed on its internal register */
+        TIM_CFORC_FOC3         = 1u;
+    /* Reconnect OCx pin to timer control --> this causes the internal programmed value into pin state */
+        TIM_OCPD_OCPD3         = 0u;
+    }
+#pragma CODE_SEG DEFAULT
+
+/****************************************************************************************************/
+/**
+* \brief    TIMer drive pin level. Allows assciated OCx to be driven to the selected logical value
+* \author   Abraham Tezmol
+* \param    UINT8 level - logical level to be driven into OCx output pin
+* \return   void
+*/
+#pragma CODE_SEG XGATE_CODE
+    void vfnTimer_DriveRPMPinState( UINT8 level )
+    {
+    /* Disconnect OCx pin from the timer control */
+        TIM_OCPD_OCPD2         = 1u;
+    /* Select output compare action upon match --> selected option is clear OCx output line to zero  */
+        TIM_TCTL2_OM2          = 1u;
+        TIM_TCTL2_OL2          = level;
+    /* Allow the desired state to be programmed on its internal register */
+        TIM_CFORC_FOC2         = 1u;
+    /* Reconnect OCx pin to timer control --> this causes the internal programmed value into pin state */
+        TIM_OCPD_OCPD2         = 0u;
+    }
+#pragma CODE_SEG DEFAULT
+/****************************************************************************************************/
+/**
+* \brief    TIMer prescaler force loading. Function allows to load a new prescaler value to selected PIT channel
+* \author   Abraham Tezmol
+* \param    UINT8 u8ClockSource   - [0 .. 1] TIM clock source selecton
+* \return   void
+*/
+#pragma CODE_SEG XGATE_CODE 
+    void vfnTimer_SetClockSource( UINT8 u8ClockSource )
+    {
+        if (u8ClockSource == TIMER_HIGH_RANGE)
+        {
+            /* Precalculated PIT microtimer (8-bit time base divider)*/
+            TIM_PTPSR = TIMER_PRECISION_PRS_VALUE_HIGH;
+        }
+        else
+        {
+            /* Precalculated PIT microtimer (8-bit time base divider)*/
+            TIM_PTPSR = TIMER_PRECISION_PRS_VALUE_LOW;
+        }
+    }
+#pragma CODE_SEG DEFAULT
